@@ -19,7 +19,7 @@ Chord manages development environments where a single feature spans multiple Git
 ## Installation
 
 ```bash
-go install github.com/landrasi/chord/cmd/chord@latest
+go install github.com/tinmancoding/chord/cmd/chord@latest
 ```
 
 ---
