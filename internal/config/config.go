@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,6 +24,16 @@ type ProjectDef struct {
 type Config struct {
 	Repositories map[string]RepositoryDef `yaml:"repositories"`
 	Projects     map[string]ProjectDef    `yaml:"projects"`
+}
+
+// DefaultPath returns the canonical config file location:
+// ~/.config/chord/chord.yaml.
+func DefaultPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("could not determine home directory: %w", err)
+	}
+	return filepath.Join(home, ".config", "chord", "chord.yaml"), nil
 }
 
 // Load reads and parses a chord.yaml file from the given path.

@@ -24,7 +24,16 @@ go install github.com/tinmancoding/chord/cmd/chord@latest
 
 ---
 
-## Configuration (`chord.yaml`)
+## Configuration
+
+Chord looks for its config file at **`~/.config/chord/chord.yaml`** by default.
+You can override this with the `-c` / `--config` flag on any command:
+
+```bash
+chord -c /path/to/my-chord.yaml compose fullstack feature/payments
+```
+
+### `~/.config/chord/chord.yaml`
 
 ```yaml
 repositories:
