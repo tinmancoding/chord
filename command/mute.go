@@ -3,8 +3,8 @@ package command
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
+	"github.com/tinmancoding/chord/internal/config"
 	"github.com/tinmancoding/chord/internal/git"
 	"github.com/tinmancoding/chord/internal/render"
 	"github.com/tinmancoding/chord/internal/workspace"
@@ -12,20 +12,20 @@ import (
 )
 
 // NewMuteCmd builds the `chord mute` command.
-func NewMuteCmd() *cobra.Command {
+func NewMuteCmd(cfgPath *string, baseDirOverride *string) *cobra.Command {
 	var force bool
 
 	cmd := &cobra.Command{
-		Use:   "mute <target_branch>",
+		Use:   "mute <project_id> <target_branch>",
 		Short: "Remove a workspace and clean up worktree metadata",
-		Long: `Mute removes the workspace directory for the given branch and prunes
-the Git worktree metadata from every base clone.
+		Long: `Mute removes the workspace directory for the given project and branch,
+and prunes the Git worktree metadata from every base clone.
 
 By default, mute refuses to delete a workspace that contains any
 repository with uncommitted changes. Use --force to override.`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMute(args[0], force)
+			return runMute(*cfgPath, *baseDirOverride, args[0], args[1], force)
 		},
 	}
 
@@ -33,11 +33,19 @@ repository with uncommitted changes. Use --force to override.`,
 	return cmd
 }
 
-func runMute(targetBranch string, force bool) error {
-	workspaceDir, err := filepath.Abs(targetBranch)
+func runMute(cfgPath, baseDirOverride, projectID, targetBranch string, force bool) error {
+	// --- Load config to resolve effective base directory ---
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
 	}
+
+	baseDir, err := cfg.EffectiveBaseDir(baseDirOverride)
+	if err != nil {
+		return fmt.Errorf("resolve base directory: %w", err)
+	}
+
+	workspaceDir := workspace.WorkspacePath(baseDir, projectID, targetBranch)
 
 	state, err := workspace.LoadState(workspaceDir)
 	if err != nil {
@@ -81,6 +89,6 @@ func runMute(targetBranch string, force bool) error {
 	}
 
 	fmt.Println()
-	render.Success("Workspace %q has been muted.", targetBranch)
+	render.Success("Workspace %q for project %q has been muted.", targetBranch, projectID)
 	return nil
 }

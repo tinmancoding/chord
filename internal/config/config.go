@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -22,8 +23,9 @@ type ProjectDef struct {
 
 // Config is the top-level structure of chord.yaml.
 type Config struct {
-	Repositories map[string]RepositoryDef `yaml:"repositories"`
-	Projects     map[string]ProjectDef    `yaml:"projects"`
+	BaseDirectory string                   `yaml:"base_directory"`
+	Repositories  map[string]RepositoryDef `yaml:"repositories"`
+	Projects      map[string]ProjectDef    `yaml:"projects"`
 }
 
 // DefaultPath returns the canonical config file location:
@@ -34,6 +36,43 @@ func DefaultPath() (string, error) {
 		return "", fmt.Errorf("could not determine home directory: %w", err)
 	}
 	return filepath.Join(home, ".config", "chord", "chord.yaml"), nil
+}
+
+// DefaultBaseDir returns the default workspace base directory: ~/chord.
+func DefaultBaseDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("could not determine home directory: %w", err)
+	}
+	return filepath.Join(home, "chord"), nil
+}
+
+// expandPath resolves a leading "~" to the user's home directory.
+func expandPath(path string) (string, error) {
+	if !strings.HasPrefix(path, "~") {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("could not determine home directory: %w", err)
+	}
+	return filepath.Join(home, path[1:]), nil
+}
+
+// EffectiveBaseDir returns the base directory to use, with the following
+// precedence (highest to lowest):
+//  1. cliOverride — the value of the --base-dir flag (non-empty string)
+//  2. c.BaseDirectory — the base_directory field in chord.yaml (non-empty)
+//  3. DefaultBaseDir() — ~/chord
+func (c *Config) EffectiveBaseDir(cliOverride string) (string, error) {
+	raw := cliOverride
+	if raw == "" {
+		raw = c.BaseDirectory
+	}
+	if raw == "" {
+		return DefaultBaseDir()
+	}
+	return expandPath(raw)
 }
 
 // Load reads and parses a chord.yaml file from the given path.

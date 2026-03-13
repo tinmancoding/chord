@@ -13,7 +13,7 @@ import (
 )
 
 // NewComposeCmd builds the `chord compose` command.
-func NewComposeCmd(cfgPath *string) *cobra.Command {
+func NewComposeCmd(cfgPath *string, baseDirOverride *string) *cobra.Command {
 	var startAt string
 
 	cmd := &cobra.Command{
@@ -25,7 +25,7 @@ for every repository in the project, tuning each one to the correct branch.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			projectID := args[0]
 			targetBranch := args[1]
-			return runCompose(*cfgPath, projectID, targetBranch, startAt)
+			return runCompose(*cfgPath, *baseDirOverride, projectID, targetBranch, startAt)
 		},
 	}
 
@@ -33,7 +33,7 @@ for every repository in the project, tuning each one to the correct branch.`,
 	return cmd
 }
 
-func runCompose(cfgPath, projectID, targetBranch, startAt string) error {
+func runCompose(cfgPath, baseDirOverride, projectID, targetBranch, startAt string) error {
 	// --- Load config ---
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -45,12 +45,14 @@ func runCompose(cfgPath, projectID, targetBranch, startAt string) error {
 		return err
 	}
 
-	// --- Determine workspace directory name ---
-	// REQ-COM-02: abort if target directory exists and is non-empty.
-	workspaceDir, err := filepath.Abs(targetBranch)
+	// --- Resolve workspace directory using base_directory hierarchy ---
+	baseDir, err := cfg.EffectiveBaseDir(baseDirOverride)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve base directory: %w", err)
 	}
+	workspaceDir := workspace.WorkspacePath(baseDir, projectID, targetBranch)
+
+	// REQ-COM-02: abort if target directory exists and is non-empty.
 	if info, err := os.Stat(workspaceDir); err == nil && info.IsDir() {
 		entries, _ := os.ReadDir(workspaceDir)
 		if len(entries) > 0 {

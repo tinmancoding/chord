@@ -63,6 +63,12 @@ func LoadState(dir string) (*State, error) {
 	return &s, nil
 }
 
+// WorkspacePath returns the canonical path for a workspace:
+// <baseDir>/<projectID>/<targetBranch>
+func WorkspacePath(baseDir, projectID, targetBranch string) string {
+	return filepath.Join(baseDir, projectID, targetBranch)
+}
+
 // BaseCacheDir returns the root path where base clones are stored.
 // Defaults to ~/.cache/chord/repos/
 func BaseCacheDir() (string, error) {

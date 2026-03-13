@@ -8,6 +8,7 @@ import (
 // NewRootCmd builds the root cobra command for chord.
 func NewRootCmd() *cobra.Command {
 	var cfgPath string
+	var baseDirOverride string
 
 	// Resolve the default config path (~/.config/chord/chord.yaml).
 	// Fall back to "chord.yaml" in the current directory if the home
@@ -30,10 +31,14 @@ to the correct branch.`,
 		&cfgPath, "config", "c", defaultCfgPath,
 		"Path to chord.yaml config file",
 	)
+	root.PersistentFlags().StringVarP(
+		&baseDirOverride, "base-dir", "b", "",
+		"Base directory for all workspaces (overrides base_directory in chord.yaml)",
+	)
 
-	root.AddCommand(NewComposeCmd(&cfgPath))
+	root.AddCommand(NewComposeCmd(&cfgPath, &baseDirOverride))
 	root.AddCommand(NewTuneCmd())
-	root.AddCommand(NewMuteCmd())
+	root.AddCommand(NewMuteCmd(&cfgPath, &baseDirOverride))
 
 	return root
 }
