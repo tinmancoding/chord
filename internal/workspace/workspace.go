@@ -62,18 +62,52 @@ func (s *State) Save() error {
 	return nil
 }
 
-// LoadState reads the .chord-state.yaml from dir.
+// LoadState reads the .chord-state.yaml from dir or any parent directory.
+// It walks up the directory tree until it finds the state file or reaches the root.
 func LoadState(dir string) (*State, error) {
-	path := filepath.Join(dir, stateFileName)
-	data, err := os.ReadFile(path)
+	stateFile, err := findStateFile(dir)
 	if err != nil {
-		return nil, fmt.Errorf("could not read workspace state at %q — are you inside a chord workspace?: %w", path, err)
+		return nil, err
+	}
+
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		return nil, fmt.Errorf("could not read workspace state at %q: %w", stateFile, err)
 	}
 	var s State
 	if err := yaml.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("parse workspace state: %w", err)
 	}
 	return &s, nil
+}
+
+// findStateFile searches for .chord-state.yaml starting from dir and walking up parent directories.
+func findStateFile(dir string) (string, error) {
+	// Get absolute path
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("could not get absolute path: %w", err)
+	}
+
+	current := absDir
+	for {
+		candidate := filepath.Join(current, stateFileName)
+		if _, err := os.Stat(candidate); err == nil {
+			// Found it!
+			return candidate, nil
+		}
+
+		// Move to parent directory
+		parent := filepath.Dir(current)
+
+		// If we've reached the root, stop
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+
+	return "", fmt.Errorf("could not find %s in %q or any parent directory — are you inside a chord workspace?", stateFileName, absDir)
 }
 
 // WorkspacePath returns the canonical path for a workspace:
