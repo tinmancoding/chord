@@ -273,6 +273,22 @@ func Push(worktreePath string) error {
 	return nil
 }
 
+// DeleteRemoteBranch deletes the branch on the remote (origin).
+func DeleteRemoteBranch(worktreePath, branch string) error {
+	if err := run(worktreePath, "git", "push", "origin", "--delete", branch); err != nil {
+		return fmt.Errorf("delete remote branch %q: %w", branch, err)
+	}
+	return nil
+}
+
+// PruneRemote removes stale remote-tracking references.
+func PruneRemote(worktreePath string) error {
+	if err := run(worktreePath, "git", "remote", "prune", "origin"); err != nil {
+		return fmt.Errorf("prune remote in %q: %w", worktreePath, err)
+	}
+	return nil
+}
+
 // --- internal helpers ---
 
 func (r *Repo) run(name string, args ...string) error {
