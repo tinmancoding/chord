@@ -38,7 +38,7 @@ to the correct branch.`,
 
 	root.AddCommand(NewComposeCmd(&cfgPath, &baseDirOverride))
 	root.AddCommand(NewCheckCmd())
-	root.AddCommand(NewTuneCmd())
+	root.AddCommand(NewTuneCmd(&cfgPath, &baseDirOverride))
 	root.AddCommand(NewMuteCmd(&cfgPath, &baseDirOverride))
 
 	return root

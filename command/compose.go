@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tinmancoding/chord/internal/config"
@@ -15,6 +17,7 @@ import (
 // NewComposeCmd builds the `chord compose` command.
 func NewComposeCmd(cfgPath *string, baseDirOverride *string) *cobra.Command {
 	var startAt string
+	var onlyRepos string
 
 	cmd := &cobra.Command{
 		Use:   "compose <project_id> <target_branch>",
@@ -25,15 +28,16 @@ for every repository in the project, tuning each one to the correct branch.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			projectID := args[0]
 			targetBranch := args[1]
-			return runCompose(*cfgPath, *baseDirOverride, projectID, targetBranch, startAt)
+			return runCompose(*cfgPath, *baseDirOverride, projectID, targetBranch, startAt, onlyRepos)
 		},
 	}
 
 	cmd.Flags().StringVar(&startAt, "start-at", "", "Commitish to start new branches from")
+	cmd.Flags().StringVar(&onlyRepos, "only", "", "Comma-separated list of repo IDs to create (defers others)")
 	return cmd
 }
 
-func runCompose(cfgPath, baseDirOverride, projectID, targetBranch, startAt string) error {
+func runCompose(cfgPath, baseDirOverride, projectID, targetBranch, startAt, onlyRepos string) error {
 	// --- Load config ---
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -43,6 +47,15 @@ func runCompose(cfgPath, baseDirOverride, projectID, targetBranch, startAt strin
 	project, err := cfg.GetProject(projectID)
 	if err != nil {
 		return err
+	}
+
+	// --- Parse and validate --only flag ---
+	var selectedRepos map[string]bool
+	if onlyRepos != "" {
+		selectedRepos, err = parseAndValidateRepoList(onlyRepos, project.Repos)
+		if err != nil {
+			return err
+		}
 	}
 
 	// --- Resolve workspace directory using base_directory hierarchy ---
@@ -70,7 +83,19 @@ func runCompose(cfgPath, baseDirOverride, projectID, targetBranch, startAt strin
 	}
 
 	// --- Process each repo ---
+	var deferredRepos []string
 	for _, repoID := range project.Repos {
+		// Check if this repo should be deferred
+		if selectedRepos != nil && !selectedRepos[repoID] {
+			deferredRepos = append(deferredRepos, repoID)
+			state.DeferredRepos = append(state.DeferredRepos, workspace.DeferredRepoState{
+				RepoID:      repoID,
+				Reason:      "user-deferred",
+				LastChecked: time.Now(),
+			})
+			continue
+		}
+
 		repoDef, err := cfg.GetRepository(repoID)
 		if err != nil {
 			return err
@@ -125,6 +150,16 @@ func runCompose(cfgPath, baseDirOverride, projectID, targetBranch, startAt strin
 
 	fmt.Println()
 	render.Success("Workspace %q composed at %s", targetBranch, workspaceDir)
+
+	// Show summary of deferred repos if any
+	if len(deferredRepos) > 0 {
+		fmt.Println()
+		render.Info("Deferred repositories (use 'chord tune' to create later):")
+		for _, repoID := range deferredRepos {
+			fmt.Printf("  • %s\n", repoID)
+		}
+	}
+
 	return nil
 }
 
@@ -182,4 +217,34 @@ func resolveBranch(repo *git.Repo, repoID, targetBranch, defaultBranch, startAt 
 		return "", err
 	}
 	return targetBranch, nil
+}
+
+// parseAndValidateRepoList parses a comma-separated list of repo IDs and validates them.
+func parseAndValidateRepoList(onlyRepos string, projectRepos []string) (map[string]bool, error) {
+	parts := strings.Split(onlyRepos, ",")
+	selected := make(map[string]bool)
+
+	// Build a set of valid repo IDs from the project
+	validRepos := make(map[string]bool)
+	for _, repoID := range projectRepos {
+		validRepos[repoID] = true
+	}
+
+	// Validate each selected repo
+	for _, repoID := range parts {
+		repoID = strings.TrimSpace(repoID)
+		if repoID == "" {
+			continue
+		}
+		if !validRepos[repoID] {
+			return nil, fmt.Errorf("invalid repo ID %q in --only flag (not found in project)", repoID)
+		}
+		selected[repoID] = true
+	}
+
+	if len(selected) == 0 {
+		return nil, fmt.Errorf("--only flag specified but no valid repo IDs provided")
+	}
+
+	return selected, nil
 }

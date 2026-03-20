@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -24,6 +25,16 @@ type RepoState struct {
 	BaseClonePath string `yaml:"base_clone_path"`
 }
 
+// DeferredRepoState tracks repositories that haven't been created yet.
+type DeferredRepoState struct {
+	// RepoID is the logical name from chord.yaml (e.g. "api-server").
+	RepoID string `yaml:"repo_id"`
+	// Reason describes why this repo was deferred (e.g. "user-deferred").
+	Reason string `yaml:"reason"`
+	// LastChecked is when tune last checked for the remote branch.
+	LastChecked time.Time `yaml:"last_checked"`
+}
+
 // State is the full workspace state, written to .chord-state.yaml.
 type State struct {
 	// ProjectID is the logical project name (e.g. "fullstack").
@@ -34,6 +45,8 @@ type State struct {
 	WorkspaceDir string `yaml:"workspace_dir"`
 	// Repos holds per-repo resolved state.
 	Repos []RepoState `yaml:"repos"`
+	// DeferredRepos holds repos that haven't been created yet.
+	DeferredRepos []DeferredRepoState `yaml:"deferred_repos,omitempty"`
 }
 
 // Save writes the state to a .chord-state.yaml file in the workspace directory.
@@ -86,4 +99,35 @@ func BaseClonePath(repoID string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(base, repoID), nil
+}
+
+// RemoveDeferred removes a repo from the deferred list by repoID.
+func (s *State) RemoveDeferred(repoID string) {
+	filtered := make([]DeferredRepoState, 0, len(s.DeferredRepos))
+	for _, d := range s.DeferredRepos {
+		if d.RepoID != repoID {
+			filtered = append(filtered, d)
+		}
+	}
+	s.DeferredRepos = filtered
+}
+
+// UpdateLastChecked updates the last_checked timestamp for a deferred repo.
+func (s *State) UpdateLastChecked(repoID string) {
+	for i := range s.DeferredRepos {
+		if s.DeferredRepos[i].RepoID == repoID {
+			s.DeferredRepos[i].LastChecked = time.Now()
+			return
+		}
+	}
+}
+
+// IsDeferred checks if a repo is in the deferred list.
+func (s *State) IsDeferred(repoID string) bool {
+	for _, d := range s.DeferredRepos {
+		if d.RepoID == repoID {
+			return true
+		}
+	}
+	return false
 }

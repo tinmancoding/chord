@@ -83,7 +83,7 @@ The effective base directory is resolved in this order (highest wins):
 
 ## Commands
 
-### `chord compose <project_id> <target_branch> [--start-at <commitish>]`
+### `chord compose <project_id> <target_branch> [--start-at <commitish>] [--only <repo1,repo2,...>]`
 
 Creates a workspace directory at `<base_directory>/<project_id>/<target_branch>` and
 initialises Git worktrees for all repos in the project.
@@ -96,11 +96,31 @@ initialises Git worktrees for all repos in the project.
 5. Else if `--start-at` is provided → create the branch from that commitish.
 6. Else → create the branch from `default_branch`.
 
+**Partial workspace composition with `--only`:**
+
+Use the `--only` flag to create worktrees for specific repositories only, deferring others until later. This is useful when:
+- Working in CI workflows where some repository branches are created asynchronously
+- Starting work on a subset of repositories before others are ready
+- Testing changes in a specific repository without needing the full environment
+
 ```bash
+# Basic usage
 chord compose fullstack feature/payments
+
+# Start with main branch
 chord compose fullstack main
+
+# Create branch from specific commitish
 chord compose fullstack feature/new-auth --start-at v2.1.0
+
+# Create workspace with only specific repos (defers others)
+chord compose fullstack feature/payments --only=web-ui
+
+# Multiple repos
+chord compose fullstack feature/payments --only=web-ui,api-server
 ```
+
+Deferred repositories are tracked in the workspace state and can be created later when their remote branches become available. Run `chord tune` to automatically detect and create worktrees for deferred repositories once their branches exist on the remote.
 
 ### `chord check`
 
@@ -121,6 +141,8 @@ The Sync Status column shows the relationship between your local branch and its 
 - **↓ Behind N**: Remote has N commits not yet pulled to local
 - **⇅ Diverged (↑N ↓M)**: Both ahead and behind (branches have diverged)
 - **(no upstream)**: No remote tracking branch configured
+
+If there are deferred repositories (from `--only` flag during compose), they will be listed after the main table with information about when they were last checked for remote branch availability.
 
 > **Sanity Rule:** When `target_branch` is `"main"`, the expected branch per repo is
 > its `default_branch`. `chord check` compares against this resolved value, so a
@@ -143,6 +165,11 @@ For repositories **with** an upstream tracking branch:
 - **Ahead and behind (diverged)**: Rebases local commits onto upstream
 - **Dirty working tree**: Automatically stashes changes before rebase (with `--yes`), then unstashes after
 
+For **deferred repositories** (from `--only` flag during compose):
+- Checks if remote branches have become available
+- Prompts to create worktrees for repos whose branches now exist on the remote (unless `--yes` is specified)
+- Automatically tracks which repos have been checked and when
+
 **Flags:**
 - `--yes` / `-y`: Skip all confirmation prompts
 - `--push`: Create upstream branches (if missing) and push all changes at the end for full synchronization
@@ -164,6 +191,24 @@ chord tune --yes --push
 
 # Just push changes (no local sync)
 chord tune --push
+```
+
+**CI Workflow Example:**
+
+When working with repositories where branches are created by CI:
+
+```bash
+# Day 1: Start with just the web-ui repo
+chord compose fullstack feature/payments --only=web-ui
+# Work on web-ui...
+
+# Day 2: CI has created branches for other repos, check if they're ready
+chord tune
+# Output:
+#   Checking for deferred repositories...
+#     [api-server] Remote branch 'feature/payments' found
+#       Create worktree for api-server? [y/N]: y
+#     [api-server] Worktree created at ~/chord/fullstack/feature-payments/api-server
 ```
 
 ### `chord mute <project_id> <target_branch> [--force]`

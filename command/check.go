@@ -1,7 +1,9 @@
 package command
 
 import (
+	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tinmancoding/chord/internal/git"
@@ -84,5 +86,52 @@ func runCheck() error {
 
 	// REQ-TUNE-01: output status table.
 	render.CheckTable(statuses, state.TargetBranch)
+
+	// Display deferred repositories if any
+	if len(state.DeferredRepos) > 0 {
+		fmt.Println()
+		render.Info("Deferred Repositories:")
+		for _, deferred := range state.DeferredRepos {
+			elapsed := formatTimeSince(deferred.LastChecked)
+			fmt.Printf("  • %s (last checked: %s)\n", deferred.RepoID, elapsed)
+		}
+		fmt.Println()
+		render.Info("Hint: Run 'chord tune' to check if remote branches are available")
+	}
+
 	return nil
+}
+
+// formatTimeSince returns a human-readable string for how long ago a time was.
+func formatTimeSince(t time.Time) string {
+	duration := time.Since(t)
+
+	switch {
+	case duration < time.Minute:
+		return "just now"
+	case duration < time.Hour:
+		minutes := int(duration.Minutes())
+		if minutes == 1 {
+			return "1 minute ago"
+		}
+		return fmt.Sprintf("%d minutes ago", minutes)
+	case duration < 24*time.Hour:
+		hours := int(duration.Hours())
+		if hours == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", hours)
+	case duration < 7*24*time.Hour:
+		days := int(duration.Hours() / 24)
+		if days == 1 {
+			return "1 day ago"
+		}
+		return fmt.Sprintf("%d days ago", days)
+	default:
+		weeks := int(duration.Hours() / 24 / 7)
+		if weeks == 1 {
+			return "1 week ago"
+		}
+		return fmt.Sprintf("%d weeks ago", weeks)
+	}
 }

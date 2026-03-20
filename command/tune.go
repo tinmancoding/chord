@@ -3,8 +3,10 @@ package command
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/tinmancoding/chord/internal/config"
 	"github.com/tinmancoding/chord/internal/git"
 	"github.com/tinmancoding/chord/internal/prompt"
 	"github.com/tinmancoding/chord/internal/render"
@@ -12,7 +14,7 @@ import (
 )
 
 // NewTuneCmd builds the `chord tune` command.
-func NewTuneCmd() *cobra.Command {
+func NewTuneCmd(cfgPath *string, baseDirOverride *string) *cobra.Command {
 	var autoYes bool
 	var push bool
 
@@ -36,7 +38,7 @@ Repositories in the middle of a rebase, merge, or with stashed changes will
 be skipped with a warning message.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTune(autoYes, push)
+			return runTune(*cfgPath, *baseDirOverride, autoYes, push)
 		},
 	}
 
@@ -46,13 +48,19 @@ be skipped with a warning message.`,
 	return cmd
 }
 
-func runTune(autoYes, pushFlag bool) error {
+func runTune(cfgPath, baseDirOverride string, autoYes, pushFlag bool) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
 
 	state, err := workspace.LoadState(cwd)
+	if err != nil {
+		return err
+	}
+
+	// Load config for deferred repos handling
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
 	}
@@ -248,6 +256,117 @@ func runTune(autoYes, pushFlag bool) error {
 				continue
 			}
 			render.Success("[%s] Pushed successfully.", repoID)
+		}
+	}
+
+	// Check for deferred repositories
+	if len(state.DeferredRepos) > 0 {
+		fmt.Println()
+		render.Info("Checking for deferred repositories...")
+
+		var stateChanged bool
+
+		for _, deferred := range state.DeferredRepos {
+			// Get repo definition from config
+			repoDef, err := cfg.GetRepository(deferred.RepoID)
+			if err != nil {
+				render.Warn("  [%s] Could not load repository definition: %v", deferred.RepoID, err)
+				continue
+			}
+
+			// Ensure base clone exists
+			clonePath, err := workspace.BaseClonePath(deferred.RepoID)
+			if err != nil {
+				render.Warn("  [%s] Could not determine base clone path: %v", deferred.RepoID, err)
+				continue
+			}
+
+			repo, err := ensureBaseClone(deferred.RepoID, repoDef.URL, clonePath)
+			if err != nil {
+				render.Warn("  [%s] Could not ensure base clone: %v", deferred.RepoID, err)
+				continue
+			}
+
+			// Fetch to get latest remote branches
+			if err := repo.Fetch(); err != nil {
+				render.Warn("  [%s] Could not fetch from remote: %v", deferred.RepoID, err)
+				continue
+			}
+
+			// Check if remote branch exists
+			exists, err := repo.RemoteBranchExists(state.TargetBranch)
+			if err != nil {
+				render.Warn("  [%s] Error checking remote branch: %v", deferred.RepoID, err)
+				state.UpdateLastChecked(deferred.RepoID)
+				stateChanged = true
+				continue
+			}
+
+			if exists {
+				// Remote branch found!
+				render.Info("  [%s] Remote branch '%s' found", deferred.RepoID, state.TargetBranch)
+
+				// Ask for confirmation unless --yes
+				if !autoYes {
+					confirmed := prompt.Confirm(fmt.Sprintf("    Create worktree for %s?", deferred.RepoID))
+					if !confirmed {
+						render.Info("  [%s] Skipped by user", deferred.RepoID)
+						state.UpdateLastChecked(deferred.RepoID)
+						stateChanged = true
+						continue
+					}
+				}
+
+				// Create worktree
+				worktreePath := filepath.Join(state.WorkspaceDir, deferred.RepoID)
+
+				// Resolve the branch (similar to compose logic)
+				resolvedBranch := state.TargetBranch
+				if state.TargetBranch == "main" {
+					resolvedBranch = repoDef.DefaultBranch
+				} else {
+					// Check if local branch exists, otherwise create tracking branch
+					localExists, _ := repo.LocalBranchExists(state.TargetBranch)
+					if !localExists {
+						render.Info("  [%s] Creating local tracking branch for origin/%s", deferred.RepoID, state.TargetBranch)
+						if err := repo.TrackRemoteBranch(state.TargetBranch); err != nil {
+							render.Error("  [%s] Failed to create tracking branch: %v", deferred.RepoID, err)
+							continue
+						}
+					}
+				}
+
+				// Add the worktree
+				if err := repo.AddWorktree(worktreePath, resolvedBranch); err != nil {
+					render.Error("  [%s] Failed to create worktree: %v", deferred.RepoID, err)
+					continue
+				}
+
+				// Add to active repos in state
+				state.Repos = append(state.Repos, workspace.RepoState{
+					RepoID:         deferred.RepoID,
+					ExpectedBranch: resolvedBranch,
+					WorktreePath:   worktreePath,
+					BaseClonePath:  clonePath,
+				})
+
+				// Remove from deferred list
+				state.RemoveDeferred(deferred.RepoID)
+				stateChanged = true
+
+				render.Success("  [%s] Worktree created at %s", deferred.RepoID, worktreePath)
+			} else {
+				render.Info("  [%s] Remote branch not yet available", deferred.RepoID)
+				state.UpdateLastChecked(deferred.RepoID)
+				stateChanged = true
+			}
+		}
+
+		// Save state if any changes were made
+		if stateChanged {
+			if err := state.Save(); err != nil {
+				render.Warn("Failed to save updated state: %v", err)
+			}
 		}
 	}
 
