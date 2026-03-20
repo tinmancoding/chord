@@ -5,11 +5,11 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/spf13/cobra"
 	"github.com/tinmancoding/chord/internal/config"
 	"github.com/tinmancoding/chord/internal/git"
 	"github.com/tinmancoding/chord/internal/render"
 	"github.com/tinmancoding/chord/internal/workspace"
-	"github.com/spf13/cobra"
 )
 
 // NewComposeCmd builds the `chord compose` command.
@@ -118,7 +118,7 @@ func runCompose(cfgPath, baseDirOverride, projectID, targetBranch, startAt strin
 		render.Success("[%s] Worktree ready at %s", repoID, worktreePath)
 	}
 
-	// Persist workspace state for tune/mute.
+	// Persist workspace state for check/mute.
 	if err := state.Save(); err != nil {
 		return err
 	}
@@ -143,7 +143,7 @@ func ensureBaseClone(repoID, url, clonePath string) (*git.Repo, error) {
 // resolveBranch implements the "Tuning Logic" from the spec.
 //
 // Special case ("main"): if targetBranch == "main", use the repo's
-// default_branch so chord tune can later validate with the Sanity Rule.
+// default_branch so chord check can later validate with the Sanity Rule.
 func resolveBranch(repo *git.Repo, repoID, targetBranch, defaultBranch, startAt string) (string, error) {
 	// Special case: "main" always maps to the repo's configured default branch.
 	if targetBranch == "main" {

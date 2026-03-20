@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -124,6 +125,152 @@ func CurrentBranch(worktreePath string) (string, error) {
 		return "", fmt.Errorf("current branch in %q: %w", worktreePath, err)
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// TrackingBranch returns the remote tracking branch for the current branch in the given worktree path.
+// Returns an empty string if there is no tracking branch configured.
+func TrackingBranch(worktreePath string) (string, error) {
+	out, err := outputAt(worktreePath, "git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+	if err != nil {
+		// If there's no tracking branch, git rev-parse returns an error
+		// In this case, we return empty string instead of an error
+		return "", nil
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// BranchSyncStatus represents the sync status between local and remote branches.
+type BranchSyncStatus struct {
+	HasTracking bool
+	Ahead       int
+	Behind      int
+}
+
+// InSync returns true if the local branch is in sync with the remote (not ahead or behind).
+func (s BranchSyncStatus) InSync() bool {
+	return s.HasTracking && s.Ahead == 0 && s.Behind == 0
+}
+
+// Diverged returns true if the local branch has diverged from the remote (both ahead and behind).
+func (s BranchSyncStatus) Diverged() bool {
+	return s.HasTracking && s.Ahead > 0 && s.Behind > 0
+}
+
+// BranchSyncStatus returns the ahead/behind status of the current branch relative to its tracking branch.
+// If there is no tracking branch, returns a status with HasTracking=false.
+func GetBranchSyncStatus(worktreePath string) (BranchSyncStatus, error) {
+	// First check if there's a tracking branch
+	trackingBranch, err := TrackingBranch(worktreePath)
+	if err != nil || trackingBranch == "" {
+		return BranchSyncStatus{HasTracking: false}, nil
+	}
+
+	// Use git rev-list to count ahead/behind commits
+	// Format: "ahead<tab>behind"
+	out, err := outputAt(worktreePath, "git", "rev-list", "--left-right", "--count", "HEAD...@{u}")
+	if err != nil {
+		// If upstream branch doesn't exist or other error, treat as no tracking
+		return BranchSyncStatus{HasTracking: false}, nil
+	}
+
+	parts := strings.Fields(strings.TrimSpace(out))
+	if len(parts) != 2 {
+		return BranchSyncStatus{HasTracking: false}, nil
+	}
+
+	ahead := 0
+	behind := 0
+	fmt.Sscanf(parts[0], "%d", &ahead)
+	fmt.Sscanf(parts[1], "%d", &behind)
+
+	return BranchSyncStatus{
+		HasTracking: true,
+		Ahead:       ahead,
+		Behind:      behind,
+	}, nil
+}
+
+// RepoOperationStatus represents the state of an ongoing git operation.
+type RepoOperationStatus struct {
+	InProgress bool
+	Operation  string
+}
+
+// GetRepoOperationStatus checks if there's an ongoing git operation in the worktree.
+// Returns status indicating if a rebase, merge, cherry-pick, or revert is in progress.
+func GetRepoOperationStatus(worktreePath string) RepoOperationStatus {
+	gitDir := filepath.Join(worktreePath, ".git")
+
+	// Check for various operation states
+	checks := []struct {
+		path      string
+		operation string
+	}{
+		{filepath.Join(gitDir, "rebase-merge"), "rebase"},
+		{filepath.Join(gitDir, "rebase-apply"), "rebase"},
+		{filepath.Join(gitDir, "MERGE_HEAD"), "merge"},
+		{filepath.Join(gitDir, "CHERRY_PICK_HEAD"), "cherry-pick"},
+		{filepath.Join(gitDir, "REVERT_HEAD"), "revert"},
+	}
+
+	for _, check := range checks {
+		if _, err := os.Stat(check.path); err == nil {
+			return RepoOperationStatus{
+				InProgress: true,
+				Operation:  check.operation,
+			}
+		}
+	}
+
+	return RepoOperationStatus{InProgress: false}
+}
+
+// PushSetUpstream pushes the current branch and sets it as the upstream tracking branch.
+func PushSetUpstream(worktreePath, branch string) error {
+	if err := run(worktreePath, "git", "push", "-u", "origin", branch); err != nil {
+		return fmt.Errorf("push set-upstream in %q: %w", worktreePath, err)
+	}
+	return nil
+}
+
+// FastForward performs a fast-forward merge with the upstream branch.
+func FastForward(worktreePath string) error {
+	if err := run(worktreePath, "git", "merge", "--ff-only", "@{u}"); err != nil {
+		return fmt.Errorf("fast-forward in %q: %w", worktreePath, err)
+	}
+	return nil
+}
+
+// Rebase rebases the current branch onto its upstream tracking branch.
+func Rebase(worktreePath string) error {
+	if err := run(worktreePath, "git", "rebase", "@{u}"); err != nil {
+		return fmt.Errorf("rebase in %q: %w", worktreePath, err)
+	}
+	return nil
+}
+
+// Stash stashes all uncommitted changes (both staged and unstaged).
+func Stash(worktreePath string) error {
+	if err := run(worktreePath, "git", "stash", "push", "-m", "chord tune auto-stash"); err != nil {
+		return fmt.Errorf("stash in %q: %w", worktreePath, err)
+	}
+	return nil
+}
+
+// StashPop pops the most recent stash.
+func StashPop(worktreePath string) error {
+	if err := run(worktreePath, "git", "stash", "pop"); err != nil {
+		return fmt.Errorf("stash pop in %q: %w", worktreePath, err)
+	}
+	return nil
+}
+
+// Push pushes the current branch to its upstream tracking branch.
+func Push(worktreePath string) error {
+	if err := run(worktreePath, "git", "push"); err != nil {
+		return fmt.Errorf("push in %q: %w", worktreePath, err)
+	}
+	return nil
 }
 
 // --- internal helpers ---

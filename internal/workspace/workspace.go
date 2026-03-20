@@ -16,7 +16,7 @@ type RepoState struct {
 	// RepoID is the logical name from chord.yaml (e.g. "api-server").
 	RepoID string `yaml:"repo_id"`
 	// ExpectedBranch is the branch that was checked out at compose time.
-	// This is what chord tune compares against (not the raw target_branch).
+	// This is what chord check compares against (not the raw target_branch).
 	ExpectedBranch string `yaml:"expected_branch"`
 	// WorktreePath is the absolute path to this repo's worktree.
 	WorktreePath string `yaml:"worktree_path"`

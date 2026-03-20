@@ -102,23 +102,69 @@ chord compose fullstack main
 chord compose fullstack feature/new-auth --start-at v2.1.0
 ```
 
-### `chord tune`
+### `chord check`
 
 Checks the harmony of the current workspace. Run this from inside a workspace directory.
 
 ```
   Chord workspace: feature/payments
 
-  Repo        Expected Branch    Current Branch     Harmony        Dirty
-  ----------  -----------------  -----------------  -------------  -----
-  web-ui      feature/payments   feature/payments   ♪ In Tune
-  api-server  feature/payments   main               ♭ Dissonance   ✎ Yes
+  Repo        Expected Branch    Current Branch     Tracking Branch     Sync Status          Harmony        Dirty
+  ----------  -----------------  -----------------  ------------------  -------------------  -------------  -----
+  web-ui      feature/payments   feature/payments   origin/feature...   ✔ In Sync            ♪ In Tune
+  api-server  feature/payments   main               origin/main         ↑ Ahead 2            ♭ Dissonance   ✎ Yes
 ```
 
+The Sync Status column shows the relationship between your local branch and its remote tracking branch:
+- **✔ In Sync**: Local and remote are at the same commit
+- **↑ Ahead N**: Local has N commits not yet pushed to remote
+- **↓ Behind N**: Remote has N commits not yet pulled to local
+- **⇅ Diverged (↑N ↓M)**: Both ahead and behind (branches have diverged)
+- **(no upstream)**: No remote tracking branch configured
+
 > **Sanity Rule:** When `target_branch` is `"main"`, the expected branch per repo is
-> its `default_branch`. `chord tune` compares against this resolved value, so a
+> its `default_branch`. `chord check` compares against this resolved value, so a
 > `fullstack main` workspace with `api-server` on `develop` is correctly reported as
 > *In Tune*.
+
+### `chord tune [--yes] [--push]`
+
+Synchronizes all repositories in the current workspace with their remote tracking branches. Run this from inside a workspace directory.
+
+**Behavior:**
+
+For repositories **without** an upstream tracking branch:
+- With `--push`: Creates and pushes the upstream branch to origin (requires confirmation unless `--yes` is specified)
+- Without `--push`: Skips the repository with a warning
+
+For repositories **with** an upstream tracking branch:
+- Fetches latest changes from origin
+- **Only behind (no local commits)**: Fast-forwards to upstream
+- **Ahead and behind (diverged)**: Rebases local commits onto upstream
+- **Dirty working tree**: Automatically stashes changes before rebase (with `--yes`), then unstashes after
+
+**Flags:**
+- `--yes` / `-y`: Skip all confirmation prompts
+- `--push`: Create upstream branches (if missing) and push all changes at the end for full synchronization
+
+**Safety features:**
+- Repositories in the middle of a rebase, merge, or other operation are skipped with a clear warning
+- Failures in one repository don't stop the process; other repositories continue
+- If stash pop fails after rebase, the user is notified to resolve conflicts manually
+
+```bash
+# Interactive mode: prompts for each operation
+chord tune
+
+# Automatic mode: perform all operations without prompts
+chord tune --yes
+
+# Full synchronization: push all changes to remote
+chord tune --yes --push
+
+# Just push changes (no local sync)
+chord tune --push
+```
 
 ### `chord mute <project_id> <target_branch> [--force]`
 
@@ -146,7 +192,7 @@ with an error. `mute` the existing workspace first before re-composing.
 Base clones are stored in `~/.cache/chord/repos/<repo-id>/`. Workspaces are
 lightweight worktrees pointing back to these clones, organised under the base
 directory in a `<project>/<branch>` hierarchy. A `.chord-state.yaml` file at
-the workspace root tracks resolved branch state for `tune` and `mute`.
+the workspace root tracks resolved branch state for `check` and `mute`.
 
 ```
 ~/.cache/chord/repos/

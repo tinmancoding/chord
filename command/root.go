@@ -1,8 +1,8 @@
 package command
 
 import (
-	"github.com/tinmancoding/chord/internal/config"
 	"github.com/spf13/cobra"
+	"github.com/tinmancoding/chord/internal/config"
 )
 
 // NewRootCmd builds the root cobra command for chord.
@@ -37,6 +37,7 @@ to the correct branch.`,
 	)
 
 	root.AddCommand(NewComposeCmd(&cfgPath, &baseDirOverride))
+	root.AddCommand(NewCheckCmd())
 	root.AddCommand(NewTuneCmd())
 	root.AddCommand(NewMuteCmd(&cfgPath, &baseDirOverride))
 
