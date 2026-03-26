@@ -8,12 +8,145 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Repo represents a git repository on disk (the base clone).
 type Repo struct {
 	// Path is the absolute path to the repository root.
 	Path string
+}
+
+// CacheMeta stores metadata about a cached repository.
+type CacheMeta struct {
+	RepoID    string    `yaml:"repo_id"`
+	URL       string    `yaml:"url"`
+	CreatedAt time.Time `yaml:"created_at"`
+	LastUsed  time.Time `yaml:"last_used"`
+}
+
+// loadCacheMeta reads cache metadata from the .chord-cache-meta file.
+func loadCacheMeta(metaPath string) (*CacheMeta, error) {
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return nil, fmt.Errorf("read cache meta: %w", err)
+	}
+
+	var meta CacheMeta
+	if err := yaml.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("parse cache meta: %w", err)
+	}
+
+	return &meta, nil
+}
+
+// saveCacheMeta writes cache metadata to the .chord-cache-meta file.
+func saveCacheMeta(metaPath string, meta *CacheMeta) error {
+	data, err := yaml.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal cache meta: %w", err)
+	}
+
+	if err := os.WriteFile(metaPath, data, 0644); err != nil {
+		return fmt.Errorf("write cache meta: %w", err)
+	}
+
+	return nil
+}
+
+// EnsureCache ensures a bare clone exists in the cache directory for the given repo.
+// If the cache exists, it validates the URL matches. If not, it creates a new cache.
+// Returns the Repo representing the cache location.
+func EnsureCache(repoID, url, cacheDir string) (*Repo, error) {
+	cachePath := filepath.Join(cacheDir, repoID)
+	metaPath := filepath.Join(cachePath, ".chord-cache-meta")
+
+	// If cache exists, validate URL
+	if _, err := os.Stat(cachePath); err == nil {
+		// Check if metadata file exists
+		meta, err := loadCacheMeta(metaPath)
+		if err != nil {
+			// Metadata file doesn't exist (likely v1 cache) - check if it's a valid git repo
+			if isValidGitRepo(cachePath) {
+				// Valid git repo from v1, create metadata file
+				meta = &CacheMeta{
+					RepoID:    repoID,
+					URL:       url,
+					CreatedAt: time.Now(), // We don't know the real creation time
+					LastUsed:  time.Now(),
+				}
+				if err := saveCacheMeta(metaPath, meta); err != nil {
+					// Non-fatal: cache still works
+					fmt.Fprintf(os.Stderr, "Warning: failed to create cache metadata: %v\n", err)
+				}
+				return &Repo{Path: cachePath}, nil
+			}
+			// Not a valid git repo, something is wrong
+			return nil, fmt.Errorf("cache directory exists but is not a valid git repository: %s", cachePath)
+		}
+
+		// Metadata exists, validate URL
+		if meta.URL != url {
+			return nil, fmt.Errorf(
+				"cache conflict for '%s':\n  Cached URL:     %s\n  Configured URL: %s\n\n"+
+					"Solutions:\n"+
+					"  1. Use a different repo_id in config\n"+
+					"  2. Remove cache: rm -rf %s\n"+
+					"  3. Update config to match cached URL",
+				repoID, meta.URL, url, cachePath)
+		}
+
+		// Update last_used
+		meta.LastUsed = time.Now()
+		if err := saveCacheMeta(metaPath, meta); err != nil {
+			// Non-fatal: just log and continue
+			fmt.Fprintf(os.Stderr, "Warning: failed to update cache metadata: %v\n", err)
+		}
+
+		return &Repo{Path: cachePath}, nil
+	}
+
+	// Create new cache
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
+		return nil, fmt.Errorf("create cache directory: %w", err)
+	}
+
+	// Bare clone
+	repo, err := Clone(url, cachePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Save metadata
+	meta := &CacheMeta{
+		RepoID:    repoID,
+		URL:       url,
+		CreatedAt: time.Now(),
+		LastUsed:  time.Now(),
+	}
+	if err := saveCacheMeta(metaPath, meta); err != nil {
+		// Non-fatal: cache is functional even without metadata
+		fmt.Fprintf(os.Stderr, "Warning: failed to save cache metadata: %v\n", err)
+	}
+
+	return repo, nil
+}
+
+// isValidGitRepo checks if a directory is a valid git repository.
+func isValidGitRepo(path string) bool {
+	// Check if the directory has a HEAD file (bare repos have this in root)
+	headPath := filepath.Join(path, "HEAD")
+	if _, err := os.Stat(headPath); err == nil {
+		return true
+	}
+	// Check if there's a .git directory (non-bare repos)
+	gitPath := filepath.Join(path, ".git")
+	if _, err := os.Stat(gitPath); err == nil {
+		return true
+	}
+	return false
 }
 
 // New returns a Repo for the given path. Does not validate the path.
@@ -36,6 +169,83 @@ func Clone(url, dest string) (*Repo, error) {
 		return nil, fmt.Errorf("configure fetch refspec in %q: %w", dest, err)
 	}
 	return repo, nil
+}
+
+// CloneWithReference creates a full git clone using the bare clone as an object reference.
+// This speeds up cloning by using local objects instead of fetching from remote.
+// The dest directory will be a full working clone with origin pointing to the actual remote URL.
+func (r *Repo) CloneWithReference(url, dest, branch string) error {
+	// Clone with reference to the cache (without checking out yet)
+	cmd := exec.Command("git", "clone",
+		"--reference", r.Path,
+		"--no-checkout",
+		url,
+		dest)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("clone with reference %q → %q: %w", url, dest, err)
+	}
+
+	// Ensure origin points to actual remote (not cache)
+	cmd = exec.Command("git", "-C", dest, "remote", "set-url", "origin", url)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("set origin URL in %q: %w", dest, err)
+	}
+
+	// Add cache as a remote to fetch local branches
+	cmd = exec.Command("git", "-C", dest, "remote", "add", "cache", r.Path)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("add cache remote in %q: %w", dest, err)
+	}
+
+	// Fetch all branches from cache (including local-only branches)
+	cmd = exec.Command("git", "-C", dest, "fetch", "cache")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("fetch from cache in %q: %w", dest, err)
+	}
+
+	// Check if branch exists locally in dest
+	cmd = exec.Command("git", "-C", dest, "branch", "--list", branch)
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("check branch %q in %q: %w", branch, dest, err)
+	}
+
+	// If branch doesn't exist locally, check if it exists in cache and create tracking branch
+	if strings.TrimSpace(string(out)) == "" {
+		cmd = exec.Command("git", "-C", dest, "branch", "--list", "-r", "cache/"+branch)
+		out, err := cmd.Output()
+		if err != nil {
+			return fmt.Errorf("check cache branch %q in %q: %w", branch, dest, err)
+		}
+		if strings.TrimSpace(string(out)) != "" {
+			// Branch exists in cache, create local branch tracking it
+			cmd = exec.Command("git", "-C", dest, "branch", branch, "cache/"+branch)
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("create branch %q from cache in %q: %w", branch, dest, err)
+			}
+		}
+	}
+
+	// Checkout the branch
+	cmd = exec.Command("git", "-C", dest, "checkout", branch)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("checkout branch %q in %q: %w", branch, dest, err)
+	}
+
+	// Remove cache remote (we don't need it anymore)
+	cmd = exec.Command("git", "-C", dest, "remote", "remove", "cache")
+	if err := cmd.Run(); err != nil {
+		// Non-fatal: just warn
+		fmt.Fprintf(os.Stderr, "Warning: failed to remove cache remote: %v\n", err)
+	}
+
+	return nil
 }
 
 // Fetch runs `git fetch --all --prune` in the base clone.

@@ -10,22 +10,25 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RepositoryDef defines a single git repository.
-type RepositoryDef struct {
+// TemplateRepo defines a repository within a template.
+type TemplateRepo struct {
 	URL           string `yaml:"url"`
-	DefaultBranch string `yaml:"default_branch"`
+	DefaultBranch string `yaml:"default_branch"` // Used when --branch is specified without per-repo override
+	Name          string `yaml:"name"`           // Optional: directory name (defaults to repo name from URL)
 }
 
-// ProjectDef defines a logical grouping of repositories.
-type ProjectDef struct {
-	Repos []string `yaml:"repos"`
+// Template defines a frequently used repository group with defaults.
+type Template struct {
+	Namespace string         `yaml:"namespace"` // Optional: default namespace for this template
+	Repos     []TemplateRepo `yaml:"repos"`
 }
 
 // Config is the top-level structure of chord.yaml.
 type Config struct {
-	BaseDirectory string                   `yaml:"base_directory"`
-	Repositories  map[string]RepositoryDef `yaml:"repositories"`
-	Projects      map[string]ProjectDef    `yaml:"projects"`
+	BaseDirectory    string              `yaml:"base_directory"`
+	DefaultNamespace string              `yaml:"default_namespace"` // Optional: defaults to "default"
+	Templates        map[string]Template `yaml:"templates"`
+	Aliases          map[string]string   `yaml:"aliases"` // Optional: short names for repository URLs
 }
 
 // DefaultPath returns the canonical config file location:
@@ -94,41 +97,91 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// ParseChordName splits a chord name into namespace and name components.
+// The last "/" separates the chord name from the namespace path.
+// Examples:
+//
+//	"my-workspace" -> ("", "my-workspace")
+//	"work/my-workspace" -> ("work", "my-workspace")
+//	"work/team-a/my-workspace" -> ("work/team-a", "my-workspace")
+func ParseChordName(chordName string) (namespace, name string) {
+	idx := strings.LastIndex(chordName, "/")
+	if idx == -1 {
+		return "", chordName
+	}
+	return chordName[:idx], chordName[idx+1:]
+}
+
+// ResolveNamespace determines the effective namespace for a chord.
+// Precedence (highest to lowest):
+//  1. cliNamespace - the --namespace flag value
+//  2. Namespace prefix in chordName (e.g., "work/team-a/my-workspace")
+//  3. Template-specific namespace in config
+//  4. c.DefaultNamespace from config
+//  5. Built-in default: "default"
+func (c *Config) ResolveNamespace(chordName, templateName, cliNamespace string) string {
+	// 1. CLI flag wins
+	if cliNamespace != "" {
+		return cliNamespace
+	}
+
+	// 2. Prefix in chord name
+	if ns, _ := ParseChordName(chordName); ns != "" {
+		return ns
+	}
+
+	// 3. Template-specific namespace in config
+	if templateName != "" {
+		if template, ok := c.Templates[templateName]; ok && template.Namespace != "" {
+			return template.Namespace
+		}
+	}
+
+	// 4. Default namespace from config
+	if c.DefaultNamespace != "" {
+		return c.DefaultNamespace
+	}
+
+	// 5. Built-in default
+	return "default"
+}
+
+// HasTemplate returns true if the given name exists as a template.
+func (c *Config) HasTemplate(name string) bool {
+	_, ok := c.Templates[name]
+	return ok
+}
+
 // validate checks the config for structural integrity.
 func (c *Config) validate() error {
-	if len(c.Repositories) == 0 {
-		return fmt.Errorf("no repositories defined")
-	}
-	if len(c.Projects) == 0 {
-		return fmt.Errorf("no projects defined")
-	}
-	for projectID, project := range c.Projects {
-		if len(project.Repos) == 0 {
-			return fmt.Errorf("project %q has no repos defined", projectID)
+	// Templates are optional - ad-hoc composition is always available
+	for templateName, template := range c.Templates {
+		if len(template.Repos) == 0 {
+			return fmt.Errorf("template %q has no repos defined", templateName)
 		}
-		for _, repoID := range project.Repos {
-			if _, ok := c.Repositories[repoID]; !ok {
-				return fmt.Errorf("project %q references unknown repository %q", projectID, repoID)
+		for i, repo := range template.Repos {
+			if repo.URL == "" {
+				return fmt.Errorf("template %q repo[%d] missing URL", templateName, i)
 			}
 		}
 	}
 	return nil
 }
 
-// GetProject returns a project by ID or an error if it doesn't exist.
-func (c *Config) GetProject(projectID string) (ProjectDef, error) {
-	p, ok := c.Projects[projectID]
+// GetTemplate returns a template by name or an error if it doesn't exist.
+func (c *Config) GetTemplate(name string) (Template, error) {
+	t, ok := c.Templates[name]
 	if !ok {
-		return ProjectDef{}, fmt.Errorf("unknown project %q", projectID)
+		return Template{}, fmt.Errorf("unknown template %q", name)
 	}
-	return p, nil
+	return t, nil
 }
 
-// GetRepository returns a repository definition by ID.
-func (c *Config) GetRepository(repoID string) (RepositoryDef, error) {
-	r, ok := c.Repositories[repoID]
-	if !ok {
-		return RepositoryDef{}, fmt.Errorf("unknown repository %q", repoID)
+// ResolveAlias resolves a repository alias to its full URL.
+// If the input is not an alias, returns it unchanged.
+func (c *Config) ResolveAlias(aliasOrURL string) string {
+	if url, ok := c.Aliases[aliasOrURL]; ok {
+		return url
 	}
-	return r, nil
+	return aliasOrURL
 }

@@ -45,26 +45,26 @@ func runCheck() error {
 	var statuses []render.RepoStatus
 
 	for _, rs := range state.Repos {
-		currentBranch, err := git.CurrentBranch(rs.WorktreePath)
+		currentBranch, err := git.CurrentBranch(rs.Path)
 		if err != nil {
-			render.Error("Could not read branch for %s: %v", rs.RepoID, err)
+			render.Error("Could not read branch for %s: %v", rs.Name, err)
 			currentBranch = "unknown"
 		}
 
-		trackingBranch, err := git.TrackingBranch(rs.WorktreePath)
+		trackingBranch, err := git.TrackingBranch(rs.Path)
 		if err != nil {
-			render.Warn("Could not read tracking branch for %s: %v", rs.RepoID, err)
+			render.Warn("Could not read tracking branch for %s: %v", rs.Name, err)
 			trackingBranch = ""
 		}
 
-		syncStatus, err := git.GetBranchSyncStatus(rs.WorktreePath)
+		syncStatus, err := git.GetBranchSyncStatus(rs.Path)
 		if err != nil {
-			render.Warn("Could not get sync status for %s: %v", rs.RepoID, err)
+			render.Warn("Could not get sync status for %s: %v", rs.Name, err)
 		}
 
-		dirty, err := git.IsDirty(rs.WorktreePath)
+		dirty, err := git.IsDirty(rs.Path)
 		if err != nil {
-			render.Warn("Could not check dirty state for %s: %v", rs.RepoID, err)
+			render.Warn("Could not check dirty state for %s: %v", rs.Name, err)
 		}
 
 		// REQ-TUNE-02 / Sanity Rule: compare against the resolved expected branch,
@@ -72,7 +72,7 @@ func runCheck() error {
 		inTune := currentBranch == rs.ExpectedBranch
 
 		statuses = append(statuses, render.RepoStatus{
-			RepoID:         rs.RepoID,
+			RepoID:         rs.Name,
 			CurrentBranch:  currentBranch,
 			ExpectedBranch: rs.ExpectedBranch,
 			TrackingBranch: trackingBranch,
@@ -84,8 +84,16 @@ func runCheck() error {
 		})
 	}
 
+	// Display header with namespace and chord info
+	fmt.Printf("  Namespace: %s\n", state.Namespace)
+	fmt.Printf("  Chord: %s\n", state.ChordName)
+	if state.TemplateName != "" {
+		fmt.Printf("  Template: %s\n", state.TemplateName)
+	}
+	fmt.Printf("  Repos: %d\n\n", len(state.Repos))
+
 	// REQ-TUNE-01: output status table.
-	render.CheckTable(statuses, state.TargetBranch)
+	render.CheckTable(statuses, "")
 
 	// Display deferred repositories if any
 	if len(state.DeferredRepos) > 0 {
@@ -93,7 +101,7 @@ func runCheck() error {
 		render.Info("Deferred Repositories:")
 		for _, deferred := range state.DeferredRepos {
 			elapsed := formatTimeSince(deferred.LastChecked)
-			fmt.Printf("  • %s (last checked: %s)\n", deferred.RepoID, elapsed)
+			fmt.Printf("  • %s (last checked: %s)\n", deferred.Name, elapsed)
 		}
 		fmt.Println()
 		render.Info("Hint: Run 'chord tune' to check if remote branches are available")

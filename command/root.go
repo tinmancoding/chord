@@ -40,6 +40,7 @@ to the correct branch.`,
 	root.AddCommand(NewCheckCmd())
 	root.AddCommand(NewTuneCmd(&cfgPath, &baseDirOverride))
 	root.AddCommand(NewMuteCmd(&cfgPath, &baseDirOverride))
+	root.AddCommand(NewListCmd(&cfgPath, &baseDirOverride))
 
 	return root
 }

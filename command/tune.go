@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/tinmancoding/chord/internal/config"
 	"github.com/tinmancoding/chord/internal/git"
 	"github.com/tinmancoding/chord/internal/prompt"
 	"github.com/tinmancoding/chord/internal/render"
@@ -59,93 +58,87 @@ func runTune(cfgPath, baseDirOverride string, autoYes, pushFlag bool) error {
 		return err
 	}
 
-	// Load config for deferred repos handling
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("\n  %s  Tuning workspace: %s\n\n", render.Bold("♫"), render.Bold(state.TargetBranch))
+	fmt.Printf("\n  %s  Tuning workspace: %s\n\n", render.Bold("♫"), render.Bold(state.ChordName))
 
 	var reposToSync []string
 
 	// Process each repository
 	for _, rs := range state.Repos {
-		render.Info("[%s] Processing...", rs.RepoID)
+		render.Info("[%s] Processing...", rs.Name)
 
 		// Check if repo is in middle of an operation
-		status := git.GetRepoOperationStatus(rs.WorktreePath)
+		status := git.GetRepoOperationStatus(rs.Path)
 		if status.InProgress {
-			render.Warn("[%s] Skipped: %s in progress. Please resolve and try again.", rs.RepoID, status.Operation)
+			render.Warn("[%s] Skipped: %s in progress. Please resolve and try again.", rs.Name, status.Operation)
 			continue
 		}
 
 		// Get tracking branch and sync status
-		trackingBranch, err := git.TrackingBranch(rs.WorktreePath)
+		trackingBranch, err := git.TrackingBranch(rs.Path)
 		if err != nil {
-			render.Error("[%s] Could not read tracking branch: %v", rs.RepoID, err)
+			render.Error("[%s] Could not read tracking branch: %v", rs.Name, err)
 			continue
 		}
 
 		// Case A: No upstream tracking branch
 		if trackingBranch == "" {
 			if !pushFlag {
-				render.Warn("[%s] No upstream tracking branch. Use --push to create one.", rs.RepoID)
+				render.Warn("[%s] No upstream tracking branch. Use --push to create one.", rs.Name)
 				continue
 			}
 
 			// Ask for confirmation
 			if !autoYes {
-				confirmed := prompt.Confirm(fmt.Sprintf("[%s] Create and push upstream branch to origin?", rs.RepoID))
+				confirmed := prompt.Confirm(fmt.Sprintf("[%s] Create and push upstream branch to origin?", rs.Name))
 				if !confirmed {
-					render.Info("[%s] Skipped by user.", rs.RepoID)
+					render.Info("[%s] Skipped by user.", rs.Name)
 					continue
 				}
 			}
 
 			// Push to create upstream
-			currentBranch, err := git.CurrentBranch(rs.WorktreePath)
+			currentBranch, err := git.CurrentBranch(rs.Path)
 			if err != nil {
-				render.Error("[%s] Could not get current branch: %v", rs.RepoID, err)
+				render.Error("[%s] Could not get current branch: %v", rs.Name, err)
 				continue
 			}
 
-			if err := git.PushSetUpstream(rs.WorktreePath, currentBranch); err != nil {
-				render.Error("[%s] Failed to push upstream: %v", rs.RepoID, err)
+			if err := git.PushSetUpstream(rs.Path, currentBranch); err != nil {
+				render.Error("[%s] Failed to push upstream: %v", rs.Name, err)
 				continue
 			}
 
-			render.Success("[%s] Pushed and set upstream to origin/%s", rs.RepoID, currentBranch)
+			render.Success("[%s] Pushed and set upstream to origin/%s", rs.Name, currentBranch)
 			continue
 		}
 
 		// Case B: Has upstream tracking branch
-		syncStatus, err := git.GetBranchSyncStatus(rs.WorktreePath)
+		syncStatus, err := git.GetBranchSyncStatus(rs.Path)
 		if err != nil {
-			render.Error("[%s] Could not get sync status: %v", rs.RepoID, err)
+			render.Error("[%s] Could not get sync status: %v", rs.Name, err)
 			continue
 		}
 
-		// Fetch latest changes
-		render.Info("[%s] Fetching from origin...", rs.RepoID)
-		repo := git.New(rs.BaseClonePath)
+		// Fetch latest changes from workspace directory
+		render.Info("[%s] Fetching from origin...", rs.Name)
+		repo := git.New(rs.Path)
 		if err := repo.Fetch(); err != nil {
-			render.Error("[%s] Failed to fetch: %v", rs.RepoID, err)
+			render.Error("[%s] Failed to fetch: %v", rs.Name, err)
 			continue
 		}
 
 		// Re-check sync status after fetch
-		syncStatus, err = git.GetBranchSyncStatus(rs.WorktreePath)
+		syncStatus, err = git.GetBranchSyncStatus(rs.Path)
 		if err != nil {
-			render.Error("[%s] Could not get sync status after fetch: %v", rs.RepoID, err)
+			render.Error("[%s] Could not get sync status after fetch: %v", rs.Name, err)
 			continue
 		}
 
 		// If in sync, nothing to do
 		if syncStatus.InSync() {
-			render.Success("[%s] Already in sync with upstream.", rs.RepoID)
+			render.Success("[%s] Already in sync with upstream.", rs.Name)
 			if pushFlag && syncStatus.Ahead > 0 {
-				reposToSync = append(reposToSync, rs.WorktreePath)
+				reposToSync = append(reposToSync, rs.Path)
 			}
 			continue
 		}
@@ -153,40 +146,40 @@ func runTune(cfgPath, baseDirOverride string, autoYes, pushFlag bool) error {
 		// Only behind: fast-forward
 		if syncStatus.Behind > 0 && syncStatus.Ahead == 0 {
 			if !autoYes {
-				confirmed := prompt.Confirm(fmt.Sprintf("[%s] Fast-forward %d commits from upstream?", rs.RepoID, syncStatus.Behind))
+				confirmed := prompt.Confirm(fmt.Sprintf("[%s] Fast-forward %d commits from upstream?", rs.Name, syncStatus.Behind))
 				if !confirmed {
-					render.Info("[%s] Skipped by user.", rs.RepoID)
+					render.Info("[%s] Skipped by user.", rs.Name)
 					continue
 				}
 			}
 
-			if err := git.FastForward(rs.WorktreePath); err != nil {
-				render.Error("[%s] Failed to fast-forward: %v", rs.RepoID, err)
+			if err := git.FastForward(rs.Path); err != nil {
+				render.Error("[%s] Failed to fast-forward: %v", rs.Name, err)
 				continue
 			}
 
-			render.Success("[%s] Fast-forwarded %d commits.", rs.RepoID, syncStatus.Behind)
+			render.Success("[%s] Fast-forwarded %d commits.", rs.Name, syncStatus.Behind)
 			continue
 		}
 
 		// Ahead and/or behind: need to rebase
-		dirty, _ := git.IsDirty(rs.WorktreePath)
+		dirty, _ := git.IsDirty(rs.Path)
 		needsStash := dirty && (syncStatus.Ahead > 0 || syncStatus.Behind > 0)
 
 		if needsStash && !autoYes {
-			render.Warn("[%s] Uncommitted changes detected. Stash is required for rebase.", rs.RepoID)
-			confirmed := prompt.Confirm(fmt.Sprintf("[%s] Stash changes, rebase, and unstash?", rs.RepoID))
+			render.Warn("[%s] Uncommitted changes detected. Stash is required for rebase.", rs.Name)
+			confirmed := prompt.Confirm(fmt.Sprintf("[%s] Stash changes, rebase, and unstash?", rs.Name))
 			if !confirmed {
-				render.Info("[%s] Skipped by user.", rs.RepoID)
+				render.Info("[%s] Skipped by user.", rs.Name)
 				continue
 			}
 		}
 
 		if syncStatus.Ahead > 0 && syncStatus.Behind > 0 {
 			if !autoYes && !needsStash {
-				confirmed := prompt.Confirm(fmt.Sprintf("[%s] Rebase %d local commits onto %d upstream commits?", rs.RepoID, syncStatus.Ahead, syncStatus.Behind))
+				confirmed := prompt.Confirm(fmt.Sprintf("[%s] Rebase %d local commits onto %d upstream commits?", rs.Name, syncStatus.Ahead, syncStatus.Behind))
 				if !confirmed {
-					render.Info("[%s] Skipped by user.", rs.RepoID)
+					render.Info("[%s] Skipped by user.", rs.Name)
 					continue
 				}
 			}
@@ -195,38 +188,38 @@ func runTune(cfgPath, baseDirOverride string, autoYes, pushFlag bool) error {
 		// Perform stash if needed
 		var stashed bool
 		if needsStash {
-			render.Info("[%s] Stashing uncommitted changes...", rs.RepoID)
-			if err := git.Stash(rs.WorktreePath); err != nil {
-				render.Error("[%s] Failed to stash: %v", rs.RepoID, err)
+			render.Info("[%s] Stashing uncommitted changes...", rs.Name)
+			if err := git.Stash(rs.Path); err != nil {
+				render.Error("[%s] Failed to stash: %v", rs.Name, err)
 				continue
 			}
 			stashed = true
 		}
 
 		// Perform rebase
-		render.Info("[%s] Rebasing...", rs.RepoID)
-		if err := git.Rebase(rs.WorktreePath); err != nil {
-			render.Error("[%s] Rebase failed: %v. Please resolve conflicts and run tune again.", rs.RepoID, err)
+		render.Info("[%s] Rebasing...", rs.Name)
+		if err := git.Rebase(rs.Path); err != nil {
+			render.Error("[%s] Rebase failed: %v. Please resolve conflicts and run tune again.", rs.Name, err)
 			// Don't try to unstash if rebase failed
 			continue
 		}
 
-		render.Success("[%s] Rebased successfully.", rs.RepoID)
+		render.Success("[%s] Rebased successfully.", rs.Name)
 
 		// Pop stash if we stashed
 		if stashed {
-			render.Info("[%s] Unstashing changes...", rs.RepoID)
-			if err := git.StashPop(rs.WorktreePath); err != nil {
-				render.Warn("[%s] Failed to unstash: %v. Please resolve conflicts manually.", rs.RepoID, err)
+			render.Info("[%s] Unstashing changes...", rs.Name)
+			if err := git.StashPop(rs.Path); err != nil {
+				render.Warn("[%s] Failed to unstash: %v. Please resolve conflicts manually.", rs.Name, err)
 				// Continue to next repo
 				continue
 			}
-			render.Success("[%s] Unstashed changes successfully.", rs.RepoID)
+			render.Success("[%s] Unstashed changes successfully.", rs.Name)
 		}
 
 		// Mark for final push if needed
 		if pushFlag {
-			reposToSync = append(reposToSync, rs.WorktreePath)
+			reposToSync = append(reposToSync, rs.Path)
 		}
 	}
 
@@ -234,24 +227,24 @@ func runTune(cfgPath, baseDirOverride string, autoYes, pushFlag bool) error {
 	if pushFlag && len(reposToSync) > 0 {
 		fmt.Println()
 		render.Info("Final synchronization: pushing to remote...")
-		for _, worktreePath := range reposToSync {
-			// Find repo ID for this worktree
+		for _, repoPath := range reposToSync {
+			// Find repo ID for this repo path
 			var repoID string
 			for _, rs := range state.Repos {
-				if rs.WorktreePath == worktreePath {
-					repoID = rs.RepoID
+				if rs.Path == repoPath {
+					repoID = rs.Name
 					break
 				}
 			}
 
 			// Check if we're ahead
-			syncStatus, err := git.GetBranchSyncStatus(worktreePath)
+			syncStatus, err := git.GetBranchSyncStatus(repoPath)
 			if err != nil || !syncStatus.HasTracking || syncStatus.Ahead == 0 {
 				continue
 			}
 
 			render.Info("[%s] Pushing %d commits to remote...", repoID, syncStatus.Ahead)
-			if err := git.Push(worktreePath); err != nil {
+			if err := git.Push(repoPath); err != nil {
 				render.Error("[%s] Failed to push: %v", repoID, err)
 				continue
 			}
@@ -267,97 +260,85 @@ func runTune(cfgPath, baseDirOverride string, autoYes, pushFlag bool) error {
 		var stateChanged bool
 
 		for _, deferred := range state.DeferredRepos {
-			// Get repo definition from config
-			repoDef, err := cfg.GetRepository(deferred.RepoID)
+			// Ensure cache exists
+			cacheDir, err := workspace.BaseCacheDir()
 			if err != nil {
-				render.Warn("  [%s] Could not load repository definition: %v", deferred.RepoID, err)
+				render.Warn("  [%s] Could not determine cache directory: %v", deferred.Name, err)
 				continue
 			}
 
-			// Ensure base clone exists
-			clonePath, err := workspace.BaseClonePath(deferred.RepoID)
+			repo, err := git.EnsureCache(deferred.Name, deferred.URL, cacheDir)
 			if err != nil {
-				render.Warn("  [%s] Could not determine base clone path: %v", deferred.RepoID, err)
-				continue
-			}
-
-			repo, err := ensureBaseClone(deferred.RepoID, repoDef.URL, clonePath)
-			if err != nil {
-				render.Warn("  [%s] Could not ensure base clone: %v", deferred.RepoID, err)
+				render.Warn("  [%s] Could not ensure cache: %v", deferred.Name, err)
 				continue
 			}
 
 			// Fetch to get latest remote branches
 			if err := repo.Fetch(); err != nil {
-				render.Warn("  [%s] Could not fetch from remote: %v", deferred.RepoID, err)
+				render.Warn("  [%s] Could not fetch from remote: %v", deferred.Name, err)
 				continue
 			}
 
 			// Check if remote branch exists
-			exists, err := repo.RemoteBranchExists(state.TargetBranch)
+			exists, err := repo.RemoteBranchExists(deferred.ExpectedBranch)
 			if err != nil {
-				render.Warn("  [%s] Error checking remote branch: %v", deferred.RepoID, err)
-				state.UpdateLastChecked(deferred.RepoID)
+				render.Warn("  [%s] Error checking remote branch: %v", deferred.Name, err)
+				state.UpdateLastChecked(deferred.Name)
 				stateChanged = true
 				continue
 			}
 
 			if exists {
 				// Remote branch found!
-				render.Info("  [%s] Remote branch '%s' found", deferred.RepoID, state.TargetBranch)
+				render.Info("  [%s] Remote branch '%s' found", deferred.Name, deferred.ExpectedBranch)
 
 				// Ask for confirmation unless --yes
 				if !autoYes {
-					confirmed := prompt.Confirm(fmt.Sprintf("    Create worktree for %s?", deferred.RepoID))
+					confirmed := prompt.Confirm(fmt.Sprintf("Create clone for %s?", deferred.Name))
 					if !confirmed {
-						render.Info("  [%s] Skipped by user", deferred.RepoID)
-						state.UpdateLastChecked(deferred.RepoID)
+						render.Info("  [%s] Skipped by user", deferred.Name)
+						state.UpdateLastChecked(deferred.Name)
 						stateChanged = true
 						continue
 					}
 				}
 
-				// Create worktree
-				worktreePath := filepath.Join(state.WorkspaceDir, deferred.RepoID)
+				// Create full clone with reference to cache
+				repoPath := filepath.Join(state.WorkspaceDir, deferred.Name)
 
-				// Resolve the branch (similar to compose logic)
-				resolvedBranch := state.TargetBranch
-				if state.TargetBranch == "main" {
-					resolvedBranch = repoDef.DefaultBranch
-				} else {
-					// Check if local branch exists, otherwise create tracking branch
-					localExists, _ := repo.LocalBranchExists(state.TargetBranch)
-					if !localExists {
-						render.Info("  [%s] Creating local tracking branch for origin/%s", deferred.RepoID, state.TargetBranch)
-						if err := repo.TrackRemoteBranch(state.TargetBranch); err != nil {
-							render.Error("  [%s] Failed to create tracking branch: %v", deferred.RepoID, err)
-							continue
-						}
+				// Check if local branch exists in cache, otherwise create tracking branch
+				localExists, _ := repo.LocalBranchExists(deferred.ExpectedBranch)
+				if !localExists {
+					render.Info("  [%s] Creating local tracking branch for origin/%s in cache", deferred.Name, deferred.ExpectedBranch)
+					if err := repo.TrackRemoteBranch(deferred.ExpectedBranch); err != nil {
+						render.Error("  [%s] Failed to create tracking branch in cache: %v", deferred.Name, err)
+						continue
 					}
 				}
 
-				// Add the worktree
-				if err := repo.AddWorktree(worktreePath, resolvedBranch); err != nil {
-					render.Error("  [%s] Failed to create worktree: %v", deferred.RepoID, err)
+				cachePath, _ := workspace.CachePathForRepo(deferred.URL)
+				if err := repo.CloneWithReference(deferred.URL, repoPath, deferred.ExpectedBranch); err != nil {
+					render.Error("  [%s] Failed to create clone: %v", deferred.Name, err)
 					continue
 				}
 
 				// Add to active repos in state
 				state.Repos = append(state.Repos, workspace.RepoState{
-					RepoID:         deferred.RepoID,
-					ExpectedBranch: resolvedBranch,
-					WorktreePath:   worktreePath,
-					BaseClonePath:  clonePath,
+					Name:           deferred.Name,
+					URL:            deferred.URL,
+					ExpectedBranch: deferred.ExpectedBranch,
+					Path:           repoPath,
+					BaseClonePath:  cachePath,
 				})
 
-				// Remove from deferred list
-				state.RemoveDeferred(deferred.RepoID)
-				stateChanged = true
+				render.Success("  [%s] Clone created at %s", deferred.Name, repoPath)
 
-				render.Success("  [%s] Worktree created at %s", deferred.RepoID, worktreePath)
+				// Remove from deferred list
+				state.RemoveDeferred(deferred.Name)
+				stateChanged = true
 			} else {
-				render.Info("  [%s] Remote branch not yet available", deferred.RepoID)
-				state.UpdateLastChecked(deferred.RepoID)
+				render.Info("  [%s] Remote branch not yet available", deferred.Name)
+				state.UpdateLastChecked(deferred.Name)
 				stateChanged = true
 			}
 		}
